@@ -217,3 +217,47 @@ cdef double align_fels_experimental(
     # Return the total log likelihood summed over all patterns.
     return ll_total
 
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def align_rooted_star_tree(
+        np.int_t [:, :] patterns,
+        np.float64_t [:] pattern_weights,
+        np.float64_t [:, :, :] multi_P,
+        np.float64_t [:] root_prior,
+        ):
+    """
+    This is a specialization to rooted star trees.
+    The assumptions are that the state is unknown at the root,
+    but that the state at all tips of the tree are known.
+    We assume that we have a prior distribution at the root
+    and that the transition matrices from the root state to the leaf
+    states are given for each terminal branch (and all branches are terminal).
+    @param patterns: each pattern maps each leaf to a nonnegative state
+    @param pattern_weights: pattern multiplicites
+    @param multi_P: a transition matrix associated to each terminal branch
+    @param root_prior: equilibrium distribution at the root
+    @return: log likelihood
+    """
+
+    # Read some dimensions of the input.
+    cdef long nleaves = multi_P.shape[0]
+    cdef long npatterns = pattern_weights.shape[0]
+    cdef long nstates = root_prior.shape[0]
+
+    # For each pattern, sum over all possible root states.
+    cdef double ll_accum = 0
+    cdef double plike, p
+    cdef long pattern_index, leaf_index
+    cdef long root_state, leaf_state
+    for pattern_index in range(npatterns):
+        plike = 0
+        for root_state in range(nstates):
+            p = root_prior[root_state]
+            for leaf_index in range(nleaves):
+                leaf_state = patterns[pattern_index, leaf_index]
+                p *= multi_P[leaf_index, root_state, leaf_state]
+            plike += p
+        ll_accum += pattern_weights[pattern_index] * log(plike)
+    return ll_accum
+
