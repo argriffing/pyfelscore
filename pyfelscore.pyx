@@ -23,6 +23,7 @@ __all__ = [
         'site_fels',
         'align_fels',
         'get_mmpp_block',
+        'get_mmpp_block_zero_off_rate',
         ]
 
 
@@ -297,4 +298,36 @@ def get_mmpp_block(double a, double w, double r, double t):
 
     # return the probability ndarray
     return P
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+def get_mmpp_block_zero_off_rate(double a, double r, double t):
+    """
+    Compute differential equations evaluated at the given time.
+    @param a: rate from off to on
+    @param r: poisson event rate
+    @param t: elapsed time
+    @return: P
+    """
+    cdef np.ndarray[np.float64_t, ndim=2] P = np.empty(
+            (2, 2), dtype=np.float64)
+
+    # lower left
+    P[1, 0] = 0
+
+    # diagonal
+    P[0, 0] = exp(-a*t)
+    P[1, 1] = exp(-r*t)
+    
+    # upper right
+    if a == r:
+        P[0, 1] = a * t * exp(-a*t)
+    else:
+        P[0, 1] = a*exp(-(r+a)*t)*(exp(r*t) - exp(a*t)) / (r - a)
+
+    # return the probability ndarray
+    return P
+
 
