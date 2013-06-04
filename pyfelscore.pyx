@@ -15,13 +15,14 @@ from cython.view cimport array as cvarray
 import numpy as np
 cimport numpy as np
 cimport cython
-from libc.math cimport log
+from libc.math cimport log, exp, sqrt
 
 np.import_array()
 
 __all__ = [
         'site_fels',
         'align_fels',
+        'get_mmpp_block',
         ]
 
 
@@ -260,4 +261,40 @@ def align_rooted_star_tree(
             plike += p
         ll_accum += pattern_weights[pattern_index] * log(plike)
     return ll_accum
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+def get_mmpp_block(double a, double w, double r, double t):
+    """
+    Compute differential equations evaluated at the given time.
+    @param a: rate from off to on
+    @param w: rate from on to off
+    @param r: poisson event rate
+    @param t: elapsed time
+    @return: P
+    """
+    cdef double p, q
+    cdef np.ndarray[np.float64_t, ndim=2] P = np.empty(
+            (2, 2), dtype=np.float64)
+
+    # initialize some common variables
+    cdef double x = sqrt((a + r + w)*(a + r + w) - 4*a*r)
+    cdef double denom = 2 * x * exp(t * (x + a + r + w) / 2)
+
+    # first row of the output ndarray
+    p = (exp(t*x)*(x + r + w - a) + (x - r - w + a)) / denom
+    q = (2 * a * (exp(t * x) - 1)) / denom
+    P[0, 0] = p
+    P[0, 1] = q
+
+    # second row of the output ndarray
+    p = (2 * w * (exp(t * x) - 1)) / denom
+    q = (exp(t*x)*(x - r - w + a) + (x + r + w - a)) / denom
+    P[1, 0] = p
+    P[1, 1] = q
+
+    # return the probability ndarray
+    return P
 
