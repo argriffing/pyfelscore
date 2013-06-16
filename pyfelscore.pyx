@@ -24,6 +24,9 @@ __all__ = [
         'align_fels',
         'get_mmpp_block',
         'get_mmpp_block_zero_off_rate',
+        'get_mmpp_frechet_all_positive',
+        'get_mmpp_frechet_diagonalizable_w_zero',
+        'mcy_get_node_to_pset',
         ]
 
 
@@ -264,6 +267,105 @@ def align_rooted_star_tree(
     return ll_accum
 
 
+
+
+###############################################################################
+# More recent attempts at speedups related to likelihood functions.
+# Terminology like 'csr', 'csc', 'indices', and 'indptr' is intended
+# to be compatible with the corresponding sparse matrix jargon.
+# For example, 'csr' is 'compressed sparse rows',
+# and 'csc' is 'comparessed sparse columns'.
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+def mcy_get_node_to_pset(
+        np.int_t [:] tree_csr_indices,
+        np.int_t [:] tree_csr_indptr,
+        #
+        np.int_t [:] trans_csr_indices,
+        np.int_t [:] trans_csr_indptr,
+        #
+        np.int_t [:, :] state_mask,
+        ):
+    """
+    Map each node to the set of states for which a subtree is feasible.
+
+    The first group of args defines the structure of the rooted tree.
+    It is organized for efficient upward and downward traversal.
+    Its nodes should be indexed such that node 0 is the root,
+    and so that the rest of the nodes are ordered
+    according to a preorder traversal.
+    The second group of args defines the structure of the transition matrix.
+    The same transition matrix is used on each edge of the tree.
+    Its structure is also defined in a way that facilitates
+    forward and backward traversal.
+    The third arg group comprises the single dense mutable binary ndarray
+    which defines the set of allowed states for each node.
+    This ndarray will be used for both input and output;
+    as input, it will contain some zeros and some ones,
+    and upon termination of this function, some of the ones will possibly
+    have been changed to zeros.
+
+    """
+    cdef int nnodes = state_mask.shape[0]
+    cdef int nstates = state_mask.shape[1]
+    cdef int na, nb
+    cdef int sa, sb
+    cdef int node_ind_start, node_ind_stop
+    cdef int state_ind_start, state_ind_stop
+    cdef int good_state_flag
+    cdef int bad_node_flag
+    cdef int i, j, k
+    for i in range(nnodes):
+
+        # Define the current node.
+        na = (nnodes - 1) - i
+        node_ind_start = tree_csr_indptr[na]
+        node_ind_stop = tree_csr_indptr[na+1]
+
+        # Query each potentially allowed state of the current node
+        # by checking whether for each child node,
+        # a valid state of the child node can be reached
+        # from the putative state of the current node.
+        for sa in range(nstates):
+            if not state_mask[na, sa]:
+                continue
+            state_ind_start = trans_csr_indptr[sa]
+            state_ind_stop = trans_csr_indptr[sa+1]
+            bad_node_flag = 0
+            for j in range(node_ind_start, node_ind_stop):
+                nb = tree_csr_indices[j]
+                good_state_flag = 0
+                for k in range(state_ind_start, state_ind_stop):
+                    sb = trans_csr_indices[k]
+                    if state_mask[nb, sb]:
+                        good_state_flag = 1
+                        break
+                if not good_state_flag:
+                    bad_node_flag = 1
+                    break
+
+            # If, for one of the child nodes nb,
+            # no allowed state can be reached from the
+            # current state sa of the current node na,
+            # then mark the state sa as forbidden in the state mask of na.
+            if bad_node_flag:
+                state_mask[na, sa] = 0
+
+    return 0
+
+
+
+
+
+
+###############################################################################
+# Special cases of the exponential of a rate matrix.
+
+
+
 @cython.boundscheck(False)
 @cython.wraparound(False)
 @cython.cdivision(True)
@@ -330,4 +432,196 @@ def get_mmpp_block_zero_off_rate(double a, double r, double t):
     # return the probability ndarray
     return P
 
+
+
+
+###############################################################################
+# Special cases of the Frechet derivative of the exponential of a rate matrix.
+
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+def get_mmpp_frechet_defective_w_zero(
+        double a, double t,
+        int ai, int bi, int ci, int di,
+        ):
+    """
+    The rates a and r are positive, and w is zero.
+    The a and r values are equal to each other.
+    The index args must each be 0 or 1.
+    A double precision floating point number is returned.
+    This is computed using a symbolic math package
+    together with the EXPM method mentioned in Tataru and Hobolth (2011).
+    @param a: rate from off to on
+    @param t: elapsed time
+    @param ai: index
+    @param bi: index
+    @param ci: index
+    @param di: index
+    @return: double
+    """
+
+    # declare matrix exponential storage
+    cdef double M[2][2][2][2]
+
+    # construct scaled variable
+    cdef double b = a*t
+    cdef double et = exp(t)
+
+    # the matrix has only a few unique entries
+    cdef double alpha = exp(-b-t)*(et-1)
+    cdef double beta = a * exp(-b-t)*(et*(t-1) + 1)
+    cdef double gamma = -a*a*exp(-b-t)*(-et - 0.5*t*t*et + t*et + 1)
+
+    # Fill the matrix exponential entries.
+    # This could be done more cleverly.
+    #
+    M[0][0][0][0] = alpha
+    M[0][1][0][0] = beta
+    M[1][0][0][0] = 0
+    M[1][1][0][0] = 0
+    #
+    M[0][0][0][1] = 0
+    M[0][1][0][1] = alpha
+    M[1][0][0][1] = 0
+    M[1][1][0][1] = 0
+    #
+    M[0][0][1][0] = beta
+    M[0][1][1][0] = gamma
+    M[1][0][1][0] = alpha
+    M[1][1][1][0] = beta
+    #
+    M[0][0][1][1] = 0
+    M[0][1][1][1] = beta
+    M[1][0][1][1] = 0
+    M[1][1][1][1] = alpha
+
+    # return the requested entry
+    return M[ai][bi][ci][di]
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+def get_mmpp_frechet_diagonalizable_w_zero(
+        double a, double r, double t,
+        int ai, int bi, int ci, int di,
+        ):
+    """
+    The rates a and r are positive, and w is zero.
+    The a and r values are not equal to each other.
+    The index args must each be 0 or 1.
+    A double precision floating point number is returned.
+    @param a: rate from off to on
+    @param r: poisson event rate
+    @param t: elapsed time
+    @param ai: index
+    @param bi: index
+    @param ci: index
+    @param di: index
+    @return: double
+    """
+
+    # declare diagonalization storage
+    cdef double U[2][2] 
+    cdef double L[2]
+    cdef double V[2][2] 
+    cdef double J[2][2] 
+
+    # eigendecomposition
+    U[0][0] = 1
+    U[0][1] = a / (a-r)
+    U[1][0] = 0
+    U[1][1] = 1
+    L[0] = -a
+    L[1] = -r
+    V[0][0] = 1
+    V[0][1] = -a / (a-r)
+    V[1][0] = 0
+    V[1][1] = 1
+
+    # function of eigenvalues
+    J[0][0] = t*exp(L[0]*t)
+    J[0][1] = (exp(L[0]*t) - exp(L[1]*t)) / (L[0] - L[1])
+    J[1][0] = (exp(L[1]*t) - exp(L[0]*t)) / (L[1] - L[0])
+    J[1][1] = t*exp(L[1]*t)
+
+    # construct the return value
+    cdef int i, j
+    cdef double isum
+    cdef double jsum
+    isum = 0
+    for i in range(2):
+        jsum = 0
+        for j in range(2):
+            jsum += U[di][j] * V[j][bi] * J[i][j]
+        isum += U[ai][i] * V[i][ci] * jsum
+    return isum
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+def get_mmpp_frechet_all_positive(
+        double a, double w, double r, double t,
+        int ai, int bi, int ci, int di,
+        ):
+    """
+    All rates are positive.  So not zero.
+    The index args must each be 0 or 1.
+    A double precision floating point number is returned.
+    @param a: rate from off to on
+    @param w: rate from on to off
+    @param r: poisson event rate
+    @param t: elapsed time
+    @param ai: index
+    @param bi: index
+    @param ci: index
+    @param di: index
+    @return: double
+    """
+
+    # precompute some things
+    cdef double x = sqrt((a+r+w)*(a+r+w) - 4*a*r)
+    cdef double xa = (-a + r + w - x) / (2 * w)
+    cdef double xb = (-a + r + w + x) / (2 * w)
+    cdef double det = 1 / (xa - xb)
+
+    # declare diagonalization storage
+    cdef double U[2][2] 
+    cdef double L[2]
+    cdef double V[2][2] 
+    cdef double J[2][2] 
+
+    # eigendecomposition
+    U[0][0] = xa
+    U[0][1] = xb
+    U[1][0] = 1
+    U[1][1] = 1
+    L[0] = 0.5 * (-a - r - w - x)
+    L[1] = 0.5 * (-a - r - w + x)
+    V[0][0] = det
+    V[0][1] = -xb*det
+    V[1][0] = -det
+    V[1][1] = xa*det
+
+    # function of eigenvalues
+    J[0][0] = t*exp(L[0]*t)
+    J[0][1] = (exp(L[0]*t) - exp(L[1]*t)) / (L[0] - L[1])
+    J[1][0] = (exp(L[1]*t) - exp(L[0]*t)) / (L[1] - L[0])
+    J[1][1] = t*exp(L[1]*t)
+
+    # construct the return value
+    cdef int i, j
+    cdef double isum
+    cdef double jsum
+    isum = 0
+    for i in range(2):
+        jsum = 0
+        for j in range(2):
+            jsum += U[di][j] * V[j][bi] * J[i][j]
+        isum += U[ai][i] * V[i][ci] * jsum
+    return isum
 
