@@ -27,6 +27,7 @@ __all__ = [
         'get_mmpp_frechet_all_positive',
         'get_mmpp_frechet_diagonalizable_w_zero',
         'mcy_get_node_to_pset',
+        'get_node_to_set',
         ]
 
 
@@ -293,14 +294,16 @@ def mcy_get_node_to_pset(
     Map each node to the set of states for which a subtree is feasible.
 
     The first group of args defines the structure of the rooted tree.
-    It is organized for efficient upward and downward traversal.
-    Its nodes should be indexed such that node 0 is the root,
-    and so that the rest of the nodes are ordered
+    Its nodes should be indexed in preorder from the root,
+    so node 0 is the root and the rest of the nodes are ordered
     according to a preorder traversal.
+
     The second group of args defines the structure of the transition matrix.
     The same transition matrix is used on each edge of the tree.
-    Its structure is also defined in a way that facilitates
-    forward and backward traversal.
+    Its structure is defined in a way that
+    efficiently gives the set of states that can be reached in one step
+    from a given state.
+
     The third arg group comprises the single dense mutable binary ndarray
     which defines the set of allowed states for each node.
     This ndarray will be used for both input and output;
@@ -357,7 +360,85 @@ def mcy_get_node_to_pset(
     return 0
 
 
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+def get_node_to_set(
+        np.int_t [:] tree_csr_indices,
+        np.int_t [:] tree_csr_indptr,
+        #
+        np.int_t [:] trans_csr_indices,
+        np.int_t [:] trans_csr_indptr,
+        #
+        np.int_t [:, :] state_mask, # (nnodes, nstates)
+        np.int_t [:] tmp_state_mask, # (nstates,)
+        ):
+    """
+    This function should be called after having called mcy_get_node_to_pset.
 
+    Whereas mcy_get_node_to_pset is a backward pass,
+    from the leaves to the root,
+    the function get_node_to_set is a forward pass
+    from the root to the leaves.
+    Both of these functions use only the sparsity structure
+    of the tree and the transition matrix and the node state constraints.
+    In other words, they only care about whether or not a given event
+    is possible, rather than caring about whether the event has
+    a high vs. a low probability.
+
+    For each pre-order parent node,
+    constrain the set of allowed states of each child node.
+    Do this by constructing the set of child node states
+    which can be reached by starting in one of the allowed parent states
+    and transitioning to the child state.
+    This constructed set will act as a mask which can be applied
+    to all child node state masks.
+
+    """
+    cdef int nnodes = state_mask.shape[0]
+    cdef int nstates = state_mask.shape[1]
+    cdef int na, nb
+    cdef int sa, sb
+    cdef int node_ind_start, node_ind_stop
+    cdef int state_ind_start, state_ind_stop
+    cdef int i, j
+
+    # For each parent node, restrict the set of possible child node states.
+    for na in range(nnodes):
+
+        # Get the info about the child nodes implied by the tree shape.
+        node_ind_start = tree_csr_indptr[na]
+        node_ind_stop = tree_csr_indptr[na+1]
+
+        # If there are no child nodes then skip.
+        if node_ind_start == node_ind_stop:
+            continue
+
+        # Construct the state mask defining the set of states
+        # that can be reached in one step from a state
+        # that is allowed at the parent node.
+        for sa in range(nstates):
+            tmp_state_mask[sa] = 0
+        for sa in range(nstates):
+            if not state_mask[na, sa]:
+                continue
+            state_ind_start = trans_csr_indptr[sa]
+            state_ind_stop = trans_csr_indptr[sa+1]
+            for i in range(state_ind_start, state_ind_stop):
+                sb = trans_csr_indices[i]
+                tmp_state_mask[sb] = 1
+
+        # For each child node,
+        # restrict the set of allowed states,
+        # by allowing only the states which can be reached in one step
+        # from a state that is allowed at the parent node.
+        for i in range(node_ind_start, node_ind_stop):
+            nb = tree_csr_indices[i]
+            for j in range(state_ind_start, state_ind_stop):
+                sb = trans_csr_indices[j]
+                state_mask[nb, sb] &= tmp_state_mask[sb]
+
+    return 0
 
 
 
