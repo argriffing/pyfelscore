@@ -401,7 +401,7 @@ def get_node_to_set(
     cdef int sa, sb
     cdef int node_ind_start, node_ind_stop
     cdef int state_ind_start, state_ind_stop
-    cdef int i, j
+    cdef int i
 
     # For each parent node, restrict the set of possible child node states.
     for na in range(nnodes):
@@ -434,8 +434,7 @@ def get_node_to_set(
         # from a state that is allowed at the parent node.
         for i in range(node_ind_start, node_ind_stop):
             nb = tree_csr_indices[i]
-            for j in range(state_ind_start, state_ind_stop):
-                sb = trans_csr_indices[j]
+            for sb in range(nstates):
                 state_mask[nb, sb] &= tmp_state_mask[sb]
 
     return 0
