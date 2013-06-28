@@ -9,6 +9,10 @@ For example:
 $ cython -a pyfelscore.pyx
 $ gcc -shared -pthread -fPIC -fwrapv -O2 -Wall -fno-strict-aliasing \
       -I/usr/include/python2.7 -o pyfelscore.so pyfelscore.c
+
+Or (re)install like this:
+$ pip install --no-deps --ignore-installed --user ~/git-repos/pyfelscore/
+
 """
 
 from cython.view cimport array as cvarray
