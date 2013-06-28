@@ -31,6 +31,7 @@ __all__ = [
         'mcy_esd_get_node_to_pset',
         'esd_get_node_to_set',
         'mcy_esd_get_node_to_pmap',
+        'get_tolerance_expectations',
         ]
 
 
@@ -678,6 +679,167 @@ def get_node_to_set(
 
     return 0
 
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+def get_tolerance_expectations(
+        double t,
+        np.float_t [:, :] Q,
+        np.float_t [:, :] P,
+        np.float_t [:, :] J,
+        np.float_t [:] dwell_accum,
+        np.float_t [:, :] trans_accum,
+        ):
+    """
+    Get expectations along an edge for an specific Markov jump process.
+
+    The state at the endpoints of the edge are unknown,
+    but the joint distribution of these states is known.
+    Only rows and columns 0 and 1 of trans_accum will be updated.
+    Only entries 0 and 1 of dwell_accum will be updated.
+    Some notation from Tataru and Hobolth (2011) is used here.
+
+    @param t: distance along the edge
+    @param Q: rate matrix
+    @param P: conditional probability matrix
+    @param J: joint distribution matrix
+    @param dwell_accum: dwell time expectation accumulation array
+    @param trans_accum: transition count expectation accumulation matrix
+
+    """
+    # Make room for the interaction matrix M[ai][bi][ci][di].
+    cdef double M[2][2][2][2]
+
+    # Pick some rates out of the rate matrix.
+    # We care only about these three rates.
+    cdef double a = Q[0, 1] # rate from off to on
+    cdef double w = Q[1, 0] # rate from on to off
+    cdef double r = Q[1, 2] # poisson absorption rate from the 'on' state
+
+    # Declare some indices.
+    cdef int ai, bi, ci, di
+
+    # Declare variables which I would prefer to declare later instead.
+    cdef double b, et, alpha, beta, gamma
+    cdef double U[2][2] 
+    cdef double L[2]
+    cdef double V[2][2] 
+    cdef double F[2][2] 
+    cdef double x, xa, sb, det
+    cdef int i, j
+    cdef double isum, jsum
+
+    # Break into various cases to compute the frechet derivative entries.
+    if a == r and not w:
+
+        # construct scaled variable
+        b = a*t
+        et = exp(t)
+
+        # the matrix has only a few unique entries
+        alpha = exp(-b-t)*(et-1)
+        beta = a * exp(-b-t)*(et*(t-1) + 1)
+        gamma = -a*a*exp(-b-t)*(-et - 0.5*t*t*et + t*et + 1)
+
+        # Fill the matrix exponential entries.
+        # This could be done more cleverly.
+        #
+        M[0][0][0][0] = alpha
+        M[0][1][0][0] = beta
+        M[1][0][0][0] = 0
+        M[1][1][0][0] = 0
+        #
+        M[0][0][0][1] = 0
+        M[0][1][0][1] = alpha
+        M[1][0][0][1] = 0
+        M[1][1][0][1] = 0
+        #
+        M[0][0][1][0] = beta
+        M[0][1][1][0] = gamma
+        M[1][0][1][0] = alpha
+        M[1][1][1][0] = beta
+        #
+        M[0][0][1][1] = 0
+        M[0][1][1][1] = beta
+        M[1][0][1][1] = 0
+        M[1][1][1][1] = alpha
+
+    else:
+        # In this case the rate matrix is not defective,
+        # so we will use the diagonalization.
+
+        if w == 0:
+
+            # eigendecomposition
+            U[0][0] = 1
+            U[0][1] = a / (a-r)
+            U[1][0] = 0
+            U[1][1] = 1
+            L[0] = -a
+            L[1] = -r
+            V[0][0] = 1
+            V[0][1] = -a / (a-r)
+            V[1][0] = 0
+            V[1][1] = 1
+
+        else:
+
+            # precompute some things
+            x = sqrt((a+r+w)*(a+r+w) - 4*a*r)
+            xa = (-a + r + w - x) / (2 * w)
+            xb = (-a + r + w + x) / (2 * w)
+            det = 1 / (xa - xb)
+
+            # eigendecomposition
+            U[0][0] = xa
+            U[0][1] = xb
+            U[1][0] = 1
+            U[1][1] = 1
+            L[0] = 0.5 * (-a - r - w - x)
+            L[1] = 0.5 * (-a - r - w + x)
+            V[0][0] = det
+            V[0][1] = -xb*det
+            V[1][0] = -det
+            V[1][1] = xa*det
+
+        # function of eigenvalues
+        F[0][0] = t*exp(L[0]*t)
+        F[0][1] = (exp(L[0]*t) - exp(L[1]*t)) / (L[0] - L[1])
+        F[1][0] = (exp(L[1]*t) - exp(L[0]*t)) / (L[1] - L[0])
+        F[1][1] = t*exp(L[1]*t)
+
+        # fill the interaction matrix entries somewhat inefficiently
+        for ai in range(2):
+            for bi in range(2):
+                for ci in range(2):
+                    for di in range(2):
+                        isum = 0
+                        for i in range(2):
+                            jsum = 0
+                            for j in range(2):
+                                jsum += U[di][j] * V[j][bi] * F[i][j]
+                            isum += U[ai][i] * V[i][ci] * jsum
+                        M[ai][bi][ci][di] = isum
+
+    # Use the interaction matrix to accumulate expectations.
+    # This could probably be simplified.
+    cdef double pa
+    for ai in range(2):
+        for bi in range(2):
+            if J[ai, bi]:
+                pa = J[ai, bi] / P[ai, bi]
+
+                # Accumulate dwell time expectations.
+                for ci in range(2):
+                    dwell_accum[ci] += pa * M[ai][bi][ci][ci]
+
+                # Accumulate transition count expectations.
+                for ci in range(2):
+                    for di in range(2):
+                        trans_accum[ci, di] += pa * M[ai][bi][ci][di]
+
+    return 0
 
 
 ###############################################################################
