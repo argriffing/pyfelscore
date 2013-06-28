@@ -32,6 +32,7 @@ __all__ = [
         'esd_get_node_to_set',
         'mcy_esd_get_node_to_pmap',
         'get_tolerance_expectations',
+        'get_absorption_expectation',
         ]
 
 
@@ -707,6 +708,8 @@ def get_tolerance_expectations(
     @param dwell_accum: dwell time expectation accumulation array
     @param trans_accum: transition count expectation accumulation matrix
 
+    @return: absorption expectation
+
     """
     # Make room for the interaction matrix M[ai][bi][ci][di].
     cdef double M[2][2][2][2]
@@ -822,6 +825,9 @@ def get_tolerance_expectations(
                             isum += U[ai][i] * V[i][ci] * jsum
                         M[ai][bi][ci][di] = isum
 
+    # Initialize the absorption expectation.
+    cdef double absorption_expectation = 0
+
     # Use the interaction matrix to accumulate expectations.
     # This could probably be simplified.
     cdef double pa
@@ -830,16 +836,19 @@ def get_tolerance_expectations(
             if J[ai, bi]:
                 pa = J[ai, bi] / P[ai, bi]
 
-                # Accumulate dwell time expectations.
+                # Accumulate absorption expectation.
+                absorption_expectation += pa * M[ai][bi][1][1]
+
                 for ci in range(2):
+
+                    # Accumulate dwell time expectations.
                     dwell_accum[ci] += pa * M[ai][bi][ci][ci]
 
-                # Accumulate transition count expectations.
-                for ci in range(2):
+                    # Accumulate transition count expectations.
                     for di in range(2):
                         trans_accum[ci, di] += pa * M[ai][bi][ci][di]
 
-    return 0
+    return r * absorption_expectation
 
 
 ###############################################################################
