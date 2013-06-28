@@ -37,6 +37,7 @@ __all__ = [
         'mcy_esd_get_node_to_pmap',
         'get_tolerance_expectations',
         'get_absorption_expectation',
+        'get_tolerance_rate_matrix',
         ]
 
 
@@ -830,7 +831,7 @@ def get_tolerance_expectations(
                         M[ai][bi][ci][di] = isum
 
     # Initialize the absorption expectation.
-    cdef double absorption_expectation = 0
+    cdef double absorption_expectation = 0.0
 
     # Use the interaction matrix to accumulate expectations.
     # This could probably be simplified.
@@ -855,6 +856,76 @@ def get_tolerance_expectations(
                         trans_accum[ci, di] += pa * Q[ci, di] * m
 
     return r * absorption_expectation
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+def get_tolerance_rate_matrix(
+        double t,
+        np.float_t [:, :] Q,
+        np.float_t [:, :] P,
+        ):
+    """
+    @param t: branch length
+    @param Q: rate matrix input, not modified, 3x3
+    @param P: transition matrix output, modified, 3x3
+
+    """
+    cdef int i, j
+
+    # Pick some rates out of the rate matrix.
+    # We care only about these three rates.
+    cdef double a = Q[0, 1] # rate from off to on
+    cdef double w = Q[1, 0] # rate from on to off
+    cdef double r = Q[1, 2] # poisson absorption rate from the 'on' state
+
+    # Misc variables.
+    cdef double p, q
+    cdef double x
+    cdef double denom
+
+    if w == 0:
+
+        # lower left
+        P[1, 0] = 0
+
+        # diagonal
+        P[0, 0] = exp(-a*t)
+        P[1, 1] = exp(-r*t)
+        
+        # upper right
+        if a == r:
+            P[0, 1] = a * t * exp(-a*t)
+        else:
+            P[0, 1] = a*exp(-(r+a)*t)*(exp(r*t) - exp(a*t)) / (r - a)
+
+    else:
+
+        # initialize some common variables
+        x = sqrt((a + r + w)*(a + r + w) - 4*a*r)
+        denom = 2 * x * exp(t * (x + a + r + w) / 2)
+
+        # first row of the output ndarray
+        p = (exp(t*x)*(x + r + w - a) + (x - r - w + a)) / denom
+        q = (2 * a * (exp(t * x) - 1)) / denom
+        P[0, 0] = p
+        P[0, 1] = q
+
+        # second row of the output ndarray
+        p = (2 * w * (exp(t * x) - 1)) / denom
+        q = (exp(t*x)*(x - r - w + a) + (x + r + w - a)) / denom
+        P[1, 0] = p
+        P[1, 1] = q
+
+    # Fill the rest of the entries of P.
+    P[0, 2] = 1.0 - P[0, 0] - P[0, 1]
+    P[1, 2] = 1.0 - P[1, 0] - P[1, 1]
+    P[2, 0] = 0
+    P[2, 1] = 0
+    P[2, 2] = 1.0
+
+    return 0
 
 
 ###############################################################################
