@@ -831,6 +831,7 @@ def get_tolerance_expectations(
     # Use the interaction matrix to accumulate expectations.
     # This could probably be simplified.
     cdef double pa
+    cdef double m
     for ai in range(2):
         for bi in range(2):
             if J[ai, bi]:
@@ -846,7 +847,8 @@ def get_tolerance_expectations(
 
                     # Accumulate transition count expectations.
                     for di in range(2):
-                        trans_accum[ci, di] += pa * M[ai][bi][ci][di]
+                        m = M[ai][bi][ci][di]
+                        trans_accum[ci, di] += pa * Q[ci, di] * m
 
     return r * absorption_expectation
 
