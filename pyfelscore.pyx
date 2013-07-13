@@ -301,10 +301,50 @@ def align_rooted_star_tree(
 # The 'esd' terminology means 'edge specific dense transition matrix'.
 
 
-# For each edge in the tree, get the joint distribution
-# over the states at the endpoints of the edge.
-#T_joint = _mc0_dense.get_joint_endpoint_distn(
-        #T_aug, root, node_to_pmap, node_to_distn, ntolerance_states)
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+def mc0_esd_get_joint_endpoint_distn(
+        np.int_t [:] tree_csr_indices,
+        np.int_t [:] tree_csr_indptr,
+        #
+        np.float_t[:, :, :] esd_transitions, # (nnodes, nstates, nstates)
+        #
+        np.float_t[:, :] node_to_pmap, # (nnodes, nstates)
+        np.float_t[:, :] node_to_distn, # (nnodes, nstates)
+        #
+        np.float_t[:, :, :] joint_distns, # (nnodes, nstates, nstates)
+        ):
+    """
+    """
+    #TODO under construction
+
+    T_aug = nx.Graph()
+    for na, nb in nx.bfs_edges(T, root):
+        pmap = node_to_pmap[nb]
+        P = T[na][nb]['P']
+        _density.check_square_dense(P)
+        J = np.zeros_like(P)
+        distn = node_to_distn[na]
+        if distn.shape[0] != nstates:
+            raise Exception('nstates inconsistency')
+        for sa in range(nstates):
+            pa = distn[sa]
+            if pa:
+
+                # Construct the conditional transition probabilities.
+                sb_weights = P[sa] * pmap
+                sb_distn = get_normalized_ndarray_distn(sb_weights)
+
+                # Add to the joint distn.
+                for sb, pb in enumerate(sb_distn):
+                    J[sa, sb] = pa * pb
+
+        # Add the joint distribution.
+        T_aug.add_edge(na, nb, J=J)
+
+    # Return the augmented tree.
+    return T_aug
 
 
 @cython.boundscheck(False)
