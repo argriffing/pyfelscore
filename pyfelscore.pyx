@@ -38,6 +38,7 @@ __all__ = [
         'get_tolerance_expectations',
         'get_absorption_expectation',
         'get_tolerance_rate_matrix',
+        'mc0_esd_get_node_to_distn',
         ]
 
 
@@ -298,6 +299,83 @@ def align_rooted_star_tree(
 # emission probability.
 #
 # The 'esd' terminology means 'edge specific dense transition matrix'.
+
+
+# For each edge in the tree, get the joint distribution
+# over the states at the endpoints of the edge.
+#T_joint = _mc0_dense.get_joint_endpoint_distn(
+        #T_aug, root, node_to_pmap, node_to_distn, ntolerance_states)
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+def mc0_esd_get_node_to_distn(
+        np.int_t [:] tree_csr_indices,
+        np.int_t [:] tree_csr_indptr,
+        #
+        np.float_t[:, :, :] esd_transitions, # (nnodes, nstates, nstates)
+        #
+        np.float_t[:] root_distn,
+        np.float_t[:, :] subtree_probability, # (nnodes, nstates)
+        np.float_t[:, :] node_to_distn, # (nnodes, nstates)
+        ):
+    """
+    """
+    cdef int nnodes = subtree_probability.shape[0]
+    cdef int nstates = subtree_probability.shape[1]
+    cdef int node_ind_start, node_ind_stop
+    cdef double pa, ptrans, weight, total
+    cdef int na, nb
+    cdef int sa, sb
+
+    # Get the posterior distribution at the root.
+    na = 0
+    total = 0
+    for sa in range(nstates):
+        weight = root_distn[sa] * subtree_probability[na, sa]
+        node_to_distn[na, sa] = weight
+        total += weight
+    for sa in range(nstates):
+        node_to_distn[na, sa] /= total
+
+    # For each edge of the tree, radiating away from the root,
+    # get the posterior distribution of states at the node
+    # farther away from the root.
+    # This is a function of
+    # the posterior distribution of states at the node nearer to the root,
+    # the transition matrix along the edge,
+    # and the pmap at the node farther away from the root.
+    for na in range(nnodes):
+
+        node_ind_start = tree_csr_indptr[na]
+        node_ind_stop = tree_csr_indptr[na+1]
+
+        # Compute the distribution for each child node.
+        for j in range(node_ind_start, node_ind_stop):
+            nb = tree_csr_indices[j]
+
+            # Initialize the child node distribution to all zeros.
+            for sb in range(nstates):
+                node_to_distn[nb, sb] = 0
+
+            # Look at each combination of parent and child states.
+            total = 0
+            for sa in range(nstates):
+                pa = node_to_distn[na, sa]
+                if not pa:
+                    continue
+                for sb in range(nstates):
+                    ptrans = esd_transitions[nb, sa, sb]
+                    weight = ptrans * subtree_probability[nb, sb]
+                    node_to_distn[nb, sb] += weight
+                    total += weight
+
+            # Normalize the state distribution at the child node.
+            for sb in range(nstates):
+                node_to_distn[nb, sb] /= total
+
+    return 0
 
 
 @cython.boundscheck(False)
