@@ -39,6 +39,7 @@ __all__ = [
         'get_absorption_expectation',
         'get_tolerance_rate_matrix',
         'mc0_esd_get_node_to_distn',
+        'mc0_esd_get_joint_endpoint_distn',
         ]
 
 
@@ -312,39 +313,49 @@ def mc0_esd_get_joint_endpoint_distn(
         #
         np.float_t[:, :] node_to_pmap, # (nnodes, nstates)
         np.float_t[:, :] node_to_distn, # (nnodes, nstates)
-        #
         np.float_t[:, :, :] joint_distns, # (nnodes, nstates, nstates)
         ):
     """
     """
-    #TODO under construction
+    cdef int nnodes = esd_transitions.shape[0]
+    cdef int nstates = esd_transitions.shape[1]
+    cdef int node_ind_start, node_ind_stop
+    cdef double pa, ptrans, weight, total
+    cdef int na, nb
+    cdef int sa, sb
 
-    T_aug = nx.Graph()
-    for na, nb in nx.bfs_edges(T, root):
-        pmap = node_to_pmap[nb]
-        P = T[na][nb]['P']
-        _density.check_square_dense(P)
-        J = np.zeros_like(P)
-        distn = node_to_distn[na]
-        if distn.shape[0] != nstates:
-            raise Exception('nstates inconsistency')
-        for sa in range(nstates):
-            pa = distn[sa]
-            if pa:
+    # Iterate over directed edges (na, nb).
+    for na in range(nnodes):
+        node_ind_start = tree_csr_indptr[na]
+        node_ind_stop = tree_csr_indptr[na+1]
+        for j in range(node_ind_start, node_ind_stop):
+            nb = tree_csr_indices[j]
 
-                # Construct the conditional transition probabilities.
-                sb_weights = P[sa] * pmap
-                sb_distn = get_normalized_ndarray_distn(sb_weights)
+            for sa in range(nstates):
+                pa = node_to_distn[na, sa]
 
-                # Add to the joint distn.
-                for sb, pb in enumerate(sb_distn):
-                    J[sa, sb] = pa * pb
+                # Initialize the joint distribution to zeros.
+                for sb in range(nstates):
+                    joint_distns[nb, sa, sb] = 0
 
-        # Add the joint distribution.
-        T_aug.add_edge(na, nb, J=J)
+                if pa:
 
-    # Return the augmented tree.
-    return T_aug
+                    # Construct the distribution over sink states
+                    # given the source state, for the given edge.
+                    total = 0
+                    for sb in range(nstates):
+                        ptrans = esd_transitions[nb, sa, sb]
+                        weight = ptrans * node_to_pmap[nb, sb]
+                        joint_distns[nb, sa, sb] = weight
+                        total += weight
+                    for sb in range(nstates):
+                        joint_distns[nb, sa, sb] /= total
+
+                    # Account for the probability of the source state.
+                    for sb in range(nstates):
+                        joint_distns[nb, sa, sb] *= pa
+
+    return 0
 
 
 @cython.boundscheck(False)
