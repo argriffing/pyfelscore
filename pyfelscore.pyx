@@ -411,20 +411,26 @@ def mc0_esd_get_node_to_distn(
                 node_to_distn[nb, sb] = 0
 
             # Look at each combination of parent and child states.
-            total = 0
             for sa in range(nstates):
                 pa = node_to_distn[na, sa]
                 if not pa:
                     continue
+
+                # Compute the normalization factor.
+                total = 0
                 for sb in range(nstates):
                     ptrans = esd_transitions[nb, sa, sb]
                     weight = ptrans * subtree_probability[nb, sb]
-                    node_to_distn[nb, sb] += weight
                     total += weight
 
-            # Normalize the state distribution at the child node.
-            for sb in range(nstates):
-                node_to_distn[nb, sb] /= total
+                if total:
+
+                    # Compute the normalized state distribution
+                    # at the child node.
+                    for sb in range(nstates):
+                        ptrans = esd_transitions[nb, sa, sb]
+                        weight = ptrans * subtree_probability[nb, sb]
+                        node_to_distn[nb, sb] += pa * weight / total
 
     return 0
 
