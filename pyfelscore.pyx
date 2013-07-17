@@ -40,6 +40,7 @@ __all__ = [
         'get_tolerance_rate_matrix',
         'mc0_esd_get_node_to_distn',
         'mc0_esd_get_joint_endpoint_distn',
+        'tmjp_get_inhomogeneous_mjp',
         ]
 
 
@@ -300,6 +301,107 @@ def align_rooted_star_tree(
 # emission probability.
 #
 # The 'esd' terminology means 'edge specific dense transition matrix'.
+
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+def tmjp_get_inhomogeneous_mjp(
+        np.int_t [:] tree_csr_indices,
+        np.int_t [:] tree_csr_indptr,
+        np.int_t [:] edge_to_primary_state,
+        #
+        np.int_t [:] primary_to_part, # (nprimary,)
+        np.float_t [:, :] Q_primary, # (nprimary, nprimary)
+        double rate_on,
+        double rate_off,
+        int tolerance_class,
+        #
+        np.int_t [:, :] node_to_allowed_tolerances, # (nnodes, 2)
+        np.float_t [:, :, :] tol_rate_matrices, # (nnodes, 3, 3)
+        ):
+    """
+    Fill a couple of arrays.
+
+    The first group of args defines the rooted tree shape
+    and the primary state along each edge.
+    Edges are indexed in correspondence
+    to the child node of the directed edge, and the edge associated
+    with the root node is present but is ignored.
+
+    The second group of args defines the evolutionary rates.
+    It also defines the tolerance class currently under consideration.
+
+    The third group of args defines the pre-allocated output arrays.
+    The node_to_allowed_tolerances array should be pre-filled
+    with ones unless some tolerance restrictions have been imposed,
+    in which case some of the entries could be zero.
+    Both of the arrays in this group will be modified.
+
+    """
+    cdef int nnodes = node_to_allowed_tolerances.shape[0]
+    cdef int nprimary = primary_to_part.shape[0]
+    cdef int node_ind_start, node_ind_stop
+    cdef int na, nb
+    cdef int sa, sb
+    cdef int ta, tb
+    cdef int edge_primary_state, edge_tolerance_class
+    cdef double edge_rate_on, edge_rate_off, absorption_rate
+    cdef int sb_part
+
+    # Iterate over directed edges (na, nb).
+    for na in range(nnodes):
+        node_ind_start = tree_csr_indptr[na]
+        node_ind_stop = tree_csr_indptr[na+1]
+        for j in range(node_ind_start, node_ind_stop):
+            nb = tree_csr_indices[j]
+
+            # Look at what is going on along this edge.
+            edge_primary_state = edge_to_primary_state[nb]
+            edge_tolerance_class = primary_to_part[edge_primary_state]
+
+            # Define the tolerance process rates along the edge.
+            edge_rate_on = rate_on
+            if tolerance_class == edge_tolerance_class:
+                edge_rate_off = 0
+            else:
+                edge_rate_off = rate_off
+
+            # Define the absorption rate on the edge.
+            # This depends on the primary state along the edge,
+            # and on the tolerance class under consideration.
+            absorption_rate = 0
+            for sb in range(nprimary):
+                if sb != edge_primary_state:
+                    sb_part = primary_to_part[sb]
+                    if sb_part == tolerance_class:
+                        absorption_rate += Q_primary[edge_primary_state, sb]
+
+            # Initialize all rates to zero.
+            for ta in range(3):
+                for tb in range(3):
+                    tol_rate_matrices[nb, ta, tb] = 0
+
+            # Define the positive off-diagonal rates.
+            tol_rate_matrices[nb, 0, 1] = edge_rate_on
+            tol_rate_matrices[nb, 1, 0] = edge_rate_off
+            tol_rate_matrices[nb, 1, 2] = absorption_rate
+
+            # Define the diagonal rates so that rows sum to zero.
+            tol_rate_matrices[nb, 0, 0] = -edge_rate_on
+            tol_rate_matrices[nb, 1, 1] = -(edge_rate_off + absorption_rate)
+
+            # Update the allowed tolerance states.
+            # If the tolerance class of the edge is equal to the
+            # tolerance class under consideration,
+            # then do not allow either endpoint node to have
+            # tolerance state 0.
+            if edge_tolerance_class == tolerance_class:
+                node_to_allowed_tolerances[na, 0] = 0
+                node_to_allowed_tolerances[nb, 0] = 0
+
+    return 0
 
 
 @cython.boundscheck(False)
