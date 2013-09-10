@@ -41,6 +41,7 @@ __all__ = [
         'mc0_esd_get_node_to_distn',
         'mc0_esd_get_joint_endpoint_distn',
         'tmjp_get_inhomogeneous_mjp',
+        'get_lb_transition_matrix',
         ]
 
 
@@ -1428,4 +1429,60 @@ def get_mmpp_frechet_all_positive(
             jsum += U[di][j] * V[j][bi] * J[i][j]
         isum += U[ai][i] * V[i][ci] * jsum
     return isum
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+def get_lb_transition_matrix(
+        double t,
+        np.float_t [:, :] Q,
+        np.float_t [:, :] P,
+        ):
+    """
+    Compute a transition matrix lower bound.
+
+    The output matrix is not technically a transition matrix,
+    because the rows may sum to less than 1.
+    Instead of integrating over all possible trajectories of time t,
+    trajectories with two or more events along the edge
+    are excluded from the integral.
+    Hence the entries of the transition-like output matrix P are lower bounds.
+
+    @param t: branch length
+    @param Q: rate matrix input, not modified
+    @param P: transition matrix output, modified
+
+    """
+    cdef int nstates = Q.shape[0]
+    cdef int sa, sb
+    cdef double ra, rb, rab
+
+    # Initialize entries of P to zero.
+    for sa in range(nstates):
+        for sb in range(nstates):
+            P[sa, sb] = 0
+
+    # Fill diagonal entries of P.
+    # These correspond to no event occurring over time t.
+    for sa in range(nstates):
+        P[sa, sa] = exp(t * Q[sa, sa])
+
+    # Fill off-diagonal entries of P.
+    # These correspond to exactly one known event occurring
+    # at some unknown time during interval t.
+    for sa in range(nstates):
+        for sb in range(nstates):
+            rab = Q[sa, sb]
+            if rab and (sa != sb):
+                ra = -Q[sa, sa]
+                rb = -Q[sb, sb]
+                if ra == rb:
+                    P[sa, sb] = rab * t * exp(-rb * t)
+                else:
+                    num = exp(-ra * t) - exp(-rb * t)
+                    den = rb - ra
+                    P[sa, sb] = rab * (num / den)
+
+    return 0
 
